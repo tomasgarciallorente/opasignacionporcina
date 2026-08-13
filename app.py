@@ -484,16 +484,43 @@ elif pagina == 'Actualizar datos':
     st.caption('Subí los mismos archivos que ya usás — no hace falta tocar nada de ellos.')
 
     st.subheader('Stock (STOCK (BD) del Excel de Dropbox)')
-    st.caption("Exportá/copiá el archivo '2B-OP Stock y Entregas Porcino 2026.xlsx' y subilo acá. "
-               "Reemplaza el snapshot anterior entero.")
-    f_stock = st.file_uploader('Excel de stock', type=['xlsx'], key='up_stock')
-    if f_stock is not None and st.button('Cargar stock'):
+    st.caption('Copiá el rango de filas de la hoja "STOCK (BD)" (columnas A a N completas, sin '
+               'encabezado) y pegalo acá con Ctrl+V — mismo orden de columnas que el Excel, así '
+               'entra tal cual. Reemplaza el stock anterior entero.')
+
+    cols_stock = ['Productor', 'Fecha faena', 'Tipificación OP', 'Correlativo', 'Kg', 'X',
+                  'Mercadería', 'Conf.', 'Gras.', 'Garrón', 'Tropa', 'Cat', 'Calidad', 'Observaciones']
+    if 'df_stock_pegado' not in st.session_state:
+        st.session_state['df_stock_pegado'] = pd.DataFrame({c: [] for c in cols_stock})
+    df_stock_editado = st.data_editor(
+        st.session_state['df_stock_pegado'], key='editor_stock', num_rows='dynamic',
+        use_container_width=True, height=350,
+        column_config={
+            'Fecha faena': st.column_config.TextColumn('Fecha faena', help='dd/mm/aaaa, tal cual la pegás del Excel'),
+        },
+    )
+    if st.button('Cargar stock desde la tabla', type='primary'):
         try:
-            rows = excel_import.parse_stock_bd(f_stock)
-            db.replace_stock_snapshot(rows)
-            st.success(f'Cargado — {len(rows)} piezas de stock.')
+            rows = excel_import.parse_stock_pegado(df_stock_editado)
+            if not rows:
+                st.error('No encontré filas válidas (necesitan Correlativo y Kg) — ¿pegaste el rango completo?')
+            else:
+                db.replace_stock_snapshot(rows)
+                st.success(f'Cargado — {len(rows)} piezas de stock.')
+                st.session_state['df_stock_pegado'] = pd.DataFrame({c: [] for c in cols_stock})
+                st.rerun()
         except Exception as e:
-            st.error(f'Error al leer el Excel: {e}')
+            st.error(f'Error al leer la tabla: {e}')
+
+    with st.expander('Prefiero subir el archivo Excel completo'):
+        f_stock = st.file_uploader('Excel de stock', type=['xlsx'], key='up_stock')
+        if f_stock is not None and st.button('Cargar stock desde el Excel'):
+            try:
+                rows = excel_import.parse_stock_bd(f_stock)
+                db.replace_stock_snapshot(rows)
+                st.success(f'Cargado — {len(rows)} piezas de stock.')
+            except Exception as e:
+                st.error(f'Error al leer el Excel: {e}')
 
     st.divider()
     st.subheader('Cupo semanal por bloque (cantidades)')

@@ -9,6 +9,7 @@ deliberada para la v1: cubre el caso real encontrado hoy (Rubiolo), a costa de s
 menos estricta que el motor de escritorio."""
 import sys
 import os
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -67,6 +68,63 @@ def parse_stock_bd(file) -> list[dict]:
             'kg': float(kg),
             'mercaderia': merc,
             'nivel_grasa': clean_tipif(tipif_raw) if tipif_raw is not None else None,
+            'comprometido': comprometido,
+        })
+    return rows
+
+
+def _parse_fecha_pegada(v):
+    """La fecha llega como texto (pegado desde Excel en una celda de tabla editable de
+    Streamlit) o como datetime si alguna vez se pasa un valor ya parseado."""
+    if v is None or v == '':
+        return None
+    if hasattr(v, 'date'):
+        return v.date().isoformat()
+    texto = str(v).strip()
+    for fmt in ('%d/%m/%Y', '%d/%m/%y', '%Y-%m-%d'):
+        try:
+            return datetime.datetime.strptime(texto, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_stock_pegado(df) -> list[dict]:
+    """df: pandas.DataFrame pegado a mano en la grilla de 'Actualizar datos' — Tomás,
+    2026-08-13: 'quiero poder copiar y pegar desde el archivo Excel, no quiero subir el
+    archivo'. Mismas columnas y mismo mapeo/filtrado que parse_stock_bd() (Productor, Fecha
+    faena, Tipificación OP, Correlativo, Kg, X, Mercadería, Conf., Gras., Garrón, Tropa, Cat,
+    Calidad, Observaciones) para que un pegado de A:N completo entre tal cual."""
+    rows = []
+    for _, fila in df.iterrows():
+        correlativo = fila.get('Correlativo')
+        kg = fila.get('Kg')
+        if correlativo in (None, '') or kg in (None, ''):
+            continue
+        try:
+            correlativo = int(float(correlativo))
+            kg = float(kg)
+        except (TypeError, ValueError):
+            continue
+        if kg <= 0:
+            continue
+        merc_raw = str(fila.get('Mercadería') or '').strip().upper()
+        if merc_raw in ('CA', 'MEI'):
+            merc = 'Capón'
+        elif merc_raw == 'CH':
+            merc = 'Chancha'
+        else:
+            continue
+        observaciones = fila.get('Observaciones')
+        comprometido = bool(observaciones and 'sale' in str(observaciones).lower())
+        tipif_raw = fila.get('Tipificación OP')
+        rows.append({
+            'correlativo': correlativo,
+            'proveedor': str(fila.get('Productor') or '').strip() or None,
+            'fecha_faena': _parse_fecha_pegada(fila.get('Fecha faena')),
+            'kg': kg,
+            'mercaderia': merc,
+            'nivel_grasa': clean_tipif(tipif_raw) if tipif_raw not in (None, '') else None,
             'comprometido': comprometido,
         })
     return rows
