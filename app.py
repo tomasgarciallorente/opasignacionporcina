@@ -508,6 +508,17 @@ elif pagina == 'Actualizar datos':
                'encabezado) y pegalo acá con Ctrl+V — mismo orden de columnas que el Excel, así '
                'entra tal cual. Reemplaza el stock anterior entero.')
 
+    # Estado actual guardado en la base — Tomás, 2026-08-13: "le di refresh y desapareció el
+    # stock que ya había cargado". La tabla de pegado SIEMPRE arranca vacía (lista para el
+    # próximo pegado) después de guardar o de refrescar la página — no significa que se haya
+    # perdido nada, lo guardado ya está en la base. Esto lo confirma en pantalla.
+    _snap_info = db.fetch_stock_snapshot_info()
+    if _snap_info['ultimo_sync']:
+        _ts = datetime.datetime.fromisoformat(_snap_info['ultimo_sync'].replace('Z', '+00:00'))
+        st.info(f"Stock guardado actualmente: **{_snap_info['total_filas']} piezas** "
+                f"(cargado el {_ts.astimezone().strftime('%d/%m %H:%M')}). La tabla de abajo "
+                f"arranca vacía siempre — es para el próximo pegado, no borra lo ya guardado.")
+
     cols_stock = ['Productor', 'Fecha faena', 'Tipificación OP', 'Correlativo', 'Kg', 'X',
                   'Mercadería', 'Conf.', 'Gras.', 'Garrón', 'Tropa', 'Cat', 'Calidad', 'Observaciones']
 
