@@ -11,7 +11,6 @@ import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import run_asignacion_stock_real as ras  # noqa: E402
 from asignacion_engine import HistoricalData, dia_de_reparto  # noqa: E402
 from stock_real import peso_bin, TIPIF_OTHER  # noqa: E402
 from asignacion_semana import asignar_semana, fechas_reparto_semana  # noqa: E402
@@ -153,7 +152,18 @@ def generar_reparto(snapshot_rows, animales_tipificados, bloque_rows, calidad_ro
     (respeta el cupo histórico de CADA día, no vacía todo de una), pero lo que sobra hoy no se
     pierde — se excluye de futuras corridas todo lo que ya se guardó (ver ya_repartidos /
     db.fetch_correlativos_ya_repartidos), así el sobrante de hoy queda disponible para que
-    mañana lo tome otra corrida, hasta agotar el 100% en sucesivos días."""
+    mañana lo tome otra corrida, hasta agotar el 100% en sucesivos días.
+
+    Fix de Tomás (2026-08-13): "no me está repartiendo con criterio FIFO a rajatabla, eran más
+    de 160 capones de ayer y antes de ayer y me reparte un total de 118 del 11 y del 12" — este
+    reparto de UN día llamaba directo a asignar_capon/asignar_chancha con el pool entero, sin el
+    filtro "vieja vs nueva" que sí tiene el semanal (ver asignar_semana): dentro de cada
+    categoría de peso/tipificación el orden SÍ era FIFO, pero nada impedía tomar faena de HOY
+    para una categoría mientras quedaba faena de días anteriores sin tocar en OTRA categoría.
+    Se corrige reusando asignar_semana() con una lista de un solo día — es el mismo motor
+    validado del semanal (1° pasada solo contra 'vieja', recién si no alcanza el cupo se abre
+    'nueva'), así el reparto de un día y el de la semana quedan con la MISMA disciplina en vez
+    de dos caminos que podían divergir."""
     if dia is None:
         dia = DIAS_PY_A_ES[dia_de_reparto(datetime.date.today()).weekday()]
 
@@ -162,25 +172,27 @@ def generar_reparto(snapshot_rows, animales_tipificados, bloque_rows, calidad_ro
 
     stock_rows = construir_stock_rows(snapshot_rows, animales_tipificados, ya_repartidos=ya_repartidos)
 
-    shares_c, target_c, matrix_c, asignado_c, disp_c, asig_c, sobrante_c, cupo_c = ras.asignar_capon(
-        hist, stock_rows, dia=dia)
-    shares_h, target_h, matrix_h, asignado_h, disp_h, asig_h, sobrante_h, cupo_h = ras.asignar_chancha(
-        hist, stock_rows, dia=dia)
+    dias_fechas_semana = fechas_reparto_semana()
+    fecha_dia = next((f for d, f in dias_fechas_semana if d == dia), None)
+    if fecha_dia is None:
+        # dia pedido ya no está en lo que queda de esta semana (p.ej. se corrió a mano un día
+        # que ya pasó) — sin una fecha de referencia no hay 'futuro' que filtrar, se usa hoy.
+        fecha_dia = datetime.date.today()
 
-    ranking_c = ranking_magro(hist, 'Capón')
-    movimientos_c = reasignar_golpes_cortes(asignado_c, shares_c, ranking_c)
-    ranking_h = ranking_magro(hist, 'Chancha')
-    movimientos_h = reasignar_golpes_cortes(asignado_h, shares_h, ranking_h)
-
-    return {
-        'dia': dia,
-        'capon': {'shares': shares_c, 'target': target_c, 'matrix': matrix_c, 'asignado': asignado_c,
-                  'disponible': disp_c, 'asignado_total': asig_c, 'sobrante': sobrante_c,
-                  'cupo': cupo_c, 'movimientos_golpes_cortes': movimientos_c},
-        'chancha': {'shares': shares_h, 'target': target_h, 'matrix': matrix_h, 'asignado': asignado_h,
-                    'disponible': disp_h, 'asignado_total': asig_h, 'sobrante': sobrante_h,
-                    'cupo': cupo_h, 'movimientos_golpes_cortes': movimientos_h},
-    }
+    out = {'dia': dia}
+    for merc_key, merc in [('capon', 'Capón'), ('chancha', 'Chancha')]:
+        pool = [r for r in stock_rows if r['merc'] == merc]
+        resultados, _pool_pendiente = asignar_semana(hist, pool, merc, [(dia, fecha_dia)])
+        r = resultados[0]
+        ranking = ranking_magro(hist, merc)
+        movimientos = reasignar_golpes_cortes(r['correlativos'], r['shares'], ranking)
+        out[merc_key] = {
+            'shares': r['shares'], 'target': r['asignado'], 'matrix': r['matrix'],
+            'asignado': r['correlativos'], 'disponible': r['disponible_dia'],
+            'asignado_total': r['total_asignado_dia'], 'sobrante': r['sobrante'],
+            'cupo': r['presupuesto'], 'movimientos_golpes_cortes': movimientos,
+        }
+    return out
 
 
 def generar_reparto_semanal(snapshot_rows, animales_tipificados, bloque_rows, calidad_rows, ya_repartidos=None):
