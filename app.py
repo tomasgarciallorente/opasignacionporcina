@@ -4,6 +4,7 @@ Login simple (contraseña compartida) -> Cargar tipificación -> Generar reparto
 Actualizar datos. Ver plan: C:\\Users\\Gtecomercial\\.claude\\plans\\moonlit-prancing-willow.md
 """
 import datetime
+import hashlib
 import io
 import os
 
@@ -72,8 +73,21 @@ def render_header():
 
 
 # --- Login ---
+def _token_login():
+    """Token derivado de la contraseña (no la contraseña en texto plano) para guardar el
+    login en la URL — Tomás, 2026-08-13: 'cada vez que le doy refresh debo poner de nuevo la
+    contraseña'. Streamlit arranca sesión nueva en cada F5 (pierde session_state), pero los
+    query params sobreviven al refresh porque son parte de la URL."""
+    pw = st.secrets.get('APP_PASSWORD')
+    return hashlib.sha256(pw.encode()).hexdigest()[:20] if pw else None
+
+
 def check_password():
     if st.session_state.get('autenticado'):
+        return True
+    token_esperado = _token_login()
+    if token_esperado and st.query_params.get('k') == token_esperado:
+        st.session_state['autenticado'] = True
         return True
     st.markdown(CSS, unsafe_allow_html=True)
     col1, col2 = st.columns([1, 3])
@@ -86,6 +100,7 @@ def check_password():
     if st.button('Entrar'):
         if pw == st.secrets.get('APP_PASSWORD'):
             st.session_state['autenticado'] = True
+            st.query_params['k'] = token_esperado
             st.rerun()
         else:
             st.error('Contraseña incorrecta.')
@@ -99,7 +114,12 @@ render_header()
 
 # --- Navegación ---
 pagina = st.sidebar.radio('Página', ['Cargar tipificación', 'Generar reparto', 'Actualizar datos'])
-st.sidebar.button('Cerrar sesión', on_click=lambda: st.session_state.pop('autenticado', None))
+def _cerrar_sesion():
+    st.session_state.pop('autenticado', None)
+    st.query_params.pop('k', None)
+
+
+st.sidebar.button('Cerrar sesión', on_click=_cerrar_sesion)
 
 
 # ============================== CARGAR TIPIFICACIÓN ==============================
@@ -490,8 +510,15 @@ elif pagina == 'Actualizar datos':
 
     cols_stock = ['Productor', 'Fecha faena', 'Tipificación OP', 'Correlativo', 'Kg', 'X',
                   'Mercadería', 'Conf.', 'Gras.', 'Garrón', 'Tropa', 'Cat', 'Calidad', 'Observaciones']
+
+    def _df_stock_vacio():
+        # dtype='object' explícito — una lista vacía [] cae en float64 por defecto en pandas,
+        # lo que choca con la columna "Fecha faena" configurada como texto (Tomás, 2026-08-13,
+        # StreamlitAPIException: "column type text... not compatible... ColumnDataKind.FLOAT").
+        return pd.DataFrame({c: pd.Series([], dtype='object') for c in cols_stock})
+
     if 'df_stock_pegado' not in st.session_state:
-        st.session_state['df_stock_pegado'] = pd.DataFrame({c: [] for c in cols_stock})
+        st.session_state['df_stock_pegado'] = _df_stock_vacio()
     df_stock_editado = st.data_editor(
         st.session_state['df_stock_pegado'], key='editor_stock', num_rows='dynamic',
         use_container_width=True, height=350,
@@ -507,7 +534,7 @@ elif pagina == 'Actualizar datos':
             else:
                 db.replace_stock_snapshot(rows)
                 st.success(f'Cargado — {len(rows)} piezas de stock.')
-                st.session_state['df_stock_pegado'] = pd.DataFrame({c: [] for c in cols_stock})
+                st.session_state['df_stock_pegado'] = _df_stock_vacio()
                 st.rerun()
         except Exception as e:
             st.error(f'Error al leer la tabla: {e}')
