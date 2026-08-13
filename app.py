@@ -548,7 +548,12 @@ elif pagina == 'Actualizar datos':
         # dtype='object' explícito — una lista vacía [] cae en float64 por defecto en pandas,
         # lo que choca con la columna "Fecha faena" configurada como texto (Tomás, 2026-08-13,
         # StreamlitAPIException: "column type text... not compatible... ColumnDataKind.FLOAT").
-        return pd.DataFrame({c: pd.Series([], dtype='object') for c in cols_stock})
+        # UNA fila vacía (no cero) — Tomás, 2026-08-13: "copio y pego del excel y lo pega así y
+        # queda mal" (todo el bloque pegado caía en una sola celda). Con la grilla en 0 filas no
+        # hay ninguna celda concreta donde anclar el pegado multi-fila/columna y el data_editor
+        # de Streamlit lo tira todo como texto suelto en la primera celda; con 1 fila de arranque
+        # sí hay una celda (0,0) para pararse y pegar, y de ahí crece solo (num_rows='dynamic').
+        return pd.DataFrame({c: [''] for c in cols_stock})
 
     if 'df_stock_pegado' not in st.session_state:
         st.session_state['df_stock_pegado'] = _df_stock_vacio()

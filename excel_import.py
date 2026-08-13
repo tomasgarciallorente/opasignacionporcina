@@ -89,44 +89,96 @@ def _parse_fecha_pegada(v):
     return None
 
 
+def _fila_desde_valores(cols_stock, valores):
+    """valores: lista posicional (mismo orden que cols_stock) -> dict con los mismos nombres
+    de columna que usa un DataFrame bien pegado, para reusar la misma extracción de abajo."""
+    return {cols_stock[i]: (valores[i] if i < len(valores) else None) for i in range(len(cols_stock))}
+
+
+def _reconstruir_filas_pegado_roto(df, cols_stock):
+    """A veces el data_editor de Streamlit no separa el pegado en celdas — todo el bloque
+    copiado del Excel (varias filas y columnas, tabuladas) cae entero como texto suelto en
+    UNA sola celda (Tomás, 2026-08-13: 'copio y pego del excel y lo pega así y queda mal').
+    Detecta esas celdas (contienen tabs o saltos de línea) y las vuelve a partir a mano por
+    línea y por tab, en el mismo orden de columnas — así el resultado es idéntico a si el
+    pegado se hubiera separado bien de entrada."""
+    filas = []
+    for _, fila in df.iterrows():
+        bloque = None
+        for v in fila.values:
+            if isinstance(v, str) and ('\t' in v or '\n' in v):
+                bloque = v
+                break
+        if bloque is None:
+            continue
+        for linea in bloque.splitlines():
+            if not linea.strip():
+                continue
+            filas.append(_fila_desde_valores(cols_stock, linea.split('\t')))
+    return filas
+
+
+def _extraer_fila_stock(fila):
+    """Toma un dict/Serie con las columnas del pegado y devuelve la fila lista para
+    db.replace_stock_snapshot(), o None si no tiene Correlativo/Kg válidos."""
+    correlativo = fila.get('Correlativo')
+    kg = fila.get('Kg')
+    if correlativo in (None, '') or kg in (None, ''):
+        return None
+    try:
+        correlativo = int(float(str(correlativo).strip()))
+        kg = float(str(kg).strip())
+    except (TypeError, ValueError):
+        return None
+    if kg <= 0:
+        return None
+    merc_raw = str(fila.get('Mercadería') or '').strip().upper()
+    if merc_raw in ('CA', 'MEI'):
+        merc = 'Capón'
+    elif merc_raw == 'CH':
+        merc = 'Chancha'
+    else:
+        return None
+    observaciones = fila.get('Observaciones')
+    comprometido = bool(observaciones and 'sale' in str(observaciones).lower())
+    tipif_raw = fila.get('Tipificación OP')
+    return {
+        'correlativo': correlativo,
+        'proveedor': str(fila.get('Productor') or '').strip() or None,
+        'fecha_faena': _parse_fecha_pegada(fila.get('Fecha faena')),
+        'kg': kg,
+        'mercaderia': merc,
+        'nivel_grasa': clean_tipif(tipif_raw) if tipif_raw not in (None, '') else None,
+        'comprometido': comprometido,
+    }
+
+
 def parse_stock_pegado(df) -> list[dict]:
     """df: pandas.DataFrame pegado a mano en la grilla de 'Actualizar datos' — Tomás,
     2026-08-13: 'quiero poder copiar y pegar desde el archivo Excel, no quiero subir el
     archivo'. Mismas columnas y mismo mapeo/filtrado que parse_stock_bd() (Productor, Fecha
     faena, Tipificación OP, Correlativo, Kg, X, Mercadería, Conf., Gras., Garrón, Tropa, Cat,
-    Calidad, Observaciones) para que un pegado de A:N completo entre tal cual."""
+    Calidad, Observaciones) para que un pegado de A:N completo entre tal cual.
+
+    Primero intenta leer el DataFrame tal cual (pegado que sí se separó bien en celdas); lo
+    que no haya dado ningún animal válido ahí, lo reintenta reconstruyendo filas rotas (ver
+    _reconstruir_filas_pegado_roto) — cubre los dos casos sin que el usuario tenga que saber
+    cuál pasó."""
     rows = []
+    correlativos_vistos = set()
     for _, fila in df.iterrows():
-        correlativo = fila.get('Correlativo')
-        kg = fila.get('Kg')
-        if correlativo in (None, '') or kg in (None, ''):
-            continue
-        try:
-            correlativo = int(float(correlativo))
-            kg = float(kg)
-        except (TypeError, ValueError):
-            continue
-        if kg <= 0:
-            continue
-        merc_raw = str(fila.get('Mercadería') or '').strip().upper()
-        if merc_raw in ('CA', 'MEI'):
-            merc = 'Capón'
-        elif merc_raw == 'CH':
-            merc = 'Chancha'
-        else:
-            continue
-        observaciones = fila.get('Observaciones')
-        comprometido = bool(observaciones and 'sale' in str(observaciones).lower())
-        tipif_raw = fila.get('Tipificación OP')
-        rows.append({
-            'correlativo': correlativo,
-            'proveedor': str(fila.get('Productor') or '').strip() or None,
-            'fecha_faena': _parse_fecha_pegada(fila.get('Fecha faena')),
-            'kg': kg,
-            'mercaderia': merc,
-            'nivel_grasa': clean_tipif(tipif_raw) if tipif_raw not in (None, '') else None,
-            'comprometido': comprometido,
-        })
+        r = _extraer_fila_stock(fila)
+        if r and r['correlativo'] not in correlativos_vistos:
+            rows.append(r)
+            correlativos_vistos.add(r['correlativo'])
+
+    cols_stock = list(df.columns)
+    for fila in _reconstruir_filas_pegado_roto(df, cols_stock):
+        r = _extraer_fila_stock(fila)
+        if r and r['correlativo'] not in correlativos_vistos:
+            rows.append(r)
+            correlativos_vistos.add(r['correlativo'])
+
     return rows
 
 
