@@ -242,9 +242,18 @@ elif pagina == 'Generar reparto':
         n_chancha = sum(1 for r in stock_rows if r['merc'] == 'Chancha')
 
         with st.container(border=True):
-            st.markdown('**Stock disponible ahora mismo (deduplicado, sin lo ya repartido y guardado)** '
-                         '<span style="color:#7a4a4a; font-size:0.8rem;">— se actualiza solo cada 1 min</span>',
-                         unsafe_allow_html=True)
+            col_titulo, col_boton = st.columns([5, 1])
+            with col_titulo:
+                st.markdown('**Stock disponible ahora mismo (deduplicado, sin lo ya repartido y guardado)** '
+                             '<span style="color:#7a4a4a; font-size:0.8rem;">— se actualiza solo cada 1 '
+                             f'min, última consulta {datetime.datetime.now().strftime("%H:%M:%S")}</span>',
+                             unsafe_allow_html=True)
+            with col_boton:
+                # Botón dentro del fragment: al tocarlo, Streamlit re-ejecuta SOLO este
+                # fragment (no toda la página) — refresco inmediato sin esperar el timer de
+                # 60s. Tomás, 2026-08-13: "quiero que se actualice el stock inmediatamente
+                # así puedo chequear que esté bien".
+                st.button('🔄 Actualizar', key='refresh_stock_manual', use_container_width=True)
             c1, c2, c3 = st.columns(3)
             if snap_info['ultimo_sync']:
                 ts = datetime.datetime.fromisoformat(snap_info['ultimo_sync'].replace('Z', '+00:00'))
@@ -254,6 +263,16 @@ elif pagina == 'Generar reparto':
                 c1.metric('Última sync del Excel', 'nunca')
             c2.metric('Tipificado hoy', f'{animales_hoy} animales', f'{len(lotes_hoy)} tropa(s)')
             c3.metric('Total disponible real', f'{len(stock_rows)}', f'{n_capon} Capón / {n_chancha} Chancha')
+            # Tomás, 2026-08-13: "en stock hay 170 piezas y ahí dice otra cosa que confunde" —
+            # "Última sync del Excel" es SOLO el snapshot subido/pegado. "Total disponible
+            # real" suma también la tipificación cargada de los últimos 7 días (no solo la de
+            # hoy) y resta lo ya repartido — de ahí la diferencia. Se explicita la cuenta acá.
+            st.caption(
+                f"Cómo se arma el total: {snap_info['total_filas']} del snapshot de Excel/pegado "
+                f"+ {len(animales_tipificados)} tipificados en los últimos 7 días "
+                f"− {len(ya_repartidos)} ya repartidos (y descontando los que están en ambos "
+                f"lados) = **{len(stock_rows)} piezas disponibles reales**."
+            )
             if lotes_hoy:
                 st.caption('Tropas de hoy: ' + ', '.join(
                     f"{l['proveedor']} ({l['mercaderia']}, {l['cantidad']})" for l in lotes_hoy))
