@@ -1,3 +1,4 @@
-streamlit>=1.36
+streamlit>=1.37
 supabase>=2.6
 openpyxl>=3.1
+pandas>=2.0

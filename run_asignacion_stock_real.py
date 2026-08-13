@@ -301,13 +301,6 @@ def write_resumen_dia(ws, dia, bloques_por_merc):
                 dc.font = Font(color='B91C1C', bold=True)
             r += 1
         remanente = disp - asig
-        ws.cell(r, 1, merc).border = BORDER
-        ws.cell(r, 2, 'Remanente sin asignar (stock general, para mañana)').border = BORDER
-        ws.cell(r, 2).font = Font(italic=True)
-        ws.cell(r, 4, remanente).border = BORDER
-        ws.cell(r, 4).alignment = CENTER
-        ws.cell(r, 4).font = Font(bold=True)
-        r += 1
         sr = r
         ws.cell(sr, 1).fill = PatternFill('solid', fgColor='E5E7EB')
         ws.cell(sr, 1).border = BORDER
@@ -324,6 +317,13 @@ def write_resumen_dia(ws, dia, bloques_por_merc):
         ws.cell(sr, 4).border = BORDER
         ws.cell(sr, 5).fill = PatternFill('solid', fgColor='E5E7EB')
         ws.cell(sr, 5).border = BORDER
+        r += 1
+        ws.cell(r, 1, merc).border = BORDER
+        ws.cell(r, 2, 'Remanente sin asignar (stock general, para mañana)').border = BORDER
+        ws.cell(r, 2).font = Font(italic=True)
+        ws.cell(r, 4, remanente).border = BORDER
+        ws.cell(r, 4).alignment = CENTER
+        ws.cell(r, 4).font = Font(bold=True)
         r += 1
         total_cupo_gral += subtotal_cupo
         total_asig_gral += subtotal_asig

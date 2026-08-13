@@ -109,11 +109,15 @@ def reasignar_golpes_cortes(asignado, shares, ranking):
     movimientos = []
     ranking_local = list(ranking)
     for origen_code, fila in con_observacion:
+        if fila not in asignado.get(origen_code, []):
+            # Ya se movió como pareja de swap de otro animal con observación de este
+            # mismo bloque (procesado antes en este loop) — no hay nada más que hacer.
+            continue
         destino_code, swap = None, None
         for cand in ranking_local:
             if cand == origen_code:
                 continue
-            candidatos = [g for g in asignado.get(cand, []) if g['peso'] == fila['peso']]
+            candidatos = [g for g in asignado.get(cand, []) if g['peso'] == fila['peso'] and not g.get('observacion')]
             if candidatos:
                 destino_code, swap = cand, candidatos[0]
                 break
@@ -172,10 +176,10 @@ def generar_reparto(snapshot_rows, animales_tipificados, bloque_rows, calidad_ro
         'dia': dia,
         'capon': {'shares': shares_c, 'target': target_c, 'matrix': matrix_c, 'asignado': asignado_c,
                   'disponible': disp_c, 'asignado_total': asig_c, 'sobrante': sobrante_c,
-                  'movimientos_golpes_cortes': movimientos_c},
+                  'cupo': cupo_c, 'movimientos_golpes_cortes': movimientos_c},
         'chancha': {'shares': shares_h, 'target': target_h, 'matrix': matrix_h, 'asignado': asignado_h,
                     'disponible': disp_h, 'asignado_total': asig_h, 'sobrante': sobrante_h,
-                    'movimientos_golpes_cortes': movimientos_h},
+                    'cupo': cupo_h, 'movimientos_golpes_cortes': movimientos_h},
     }
 
 

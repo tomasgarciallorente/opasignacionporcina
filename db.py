@@ -148,6 +148,26 @@ def fetch_historico():
     return bloque, calidad
 
 
+def fetch_cupo_bloque(mercaderia):
+    """Solo las filas de cupo (porcino_historico_bloque) de una mercadería — para la grilla
+    editable de cantidades (Tomás, 2026-08-12: 'necesito simplificar... que las cantidades se
+    carguen en la misma app'). No toca porcino_historico_calidad — la calidad sigue saliendo
+    del promedio histórico subido por Excel, sin cambios."""
+    sb = get_client()
+    return sb.table("porcino_historico_bloque").select("*").eq("mercaderia", mercaderia).execute().data
+
+
+def update_cupos_bloque(mercaderia, filas):
+    """filas: [{bloque_codigo, bloque_nombre, dia, cupo}] — reemplaza SOLO las filas de cupo de
+    esta mercadería (deja intactas las de la otra mercadería y toda porcino_historico_calidad)."""
+    sb = get_client()
+    sb.table("porcino_historico_bloque").delete().eq("mercaderia", mercaderia).execute()
+    rows = [{"mercaderia": mercaderia, **f} for f in filas]
+    if rows:
+        for i in range(0, len(rows), 500):
+            sb.table("porcino_historico_bloque").insert(rows[i:i + 500]).execute()
+
+
 # --- Resultado de una corrida de reparto ---
 
 def insert_reparto_resultados(dia_reparto, filas):
@@ -158,3 +178,15 @@ def insert_reparto_resultados(dia_reparto, filas):
     rows = [{"dia_reparto": dia_reparto, "corrida_at": corrida_at, **f} for f in filas]
     for i in range(0, len(rows), 500):
         sb.table("porcino_reparto_resultados").insert(rows[i:i + 500]).execute()
+
+
+def fetch_correlativos_ya_repartidos():
+    """{(mercaderia, correlativo), ...} — todo lo que ya se guardó en una corrida anterior de
+    'Generar reparto' (botón 'Guardar este resultado'). Tomás, 2026-08-12: lo que no entra en
+    el cupo de un día no se pierde, tiene que arrastrarse a los próximos días hasta agotar el
+    100% del stock — para eso, lo YA repartido y guardado se excluye del pool de corridas
+    futuras (si no, cada corrida nueva recalcularía sobre el mismo stock total de siempre y el
+    sobrante nunca bajaría)."""
+    sb = get_client()
+    rows = sb.table("porcino_reparto_resultados").select("mercaderia,correlativo").execute().data
+    return {(r["mercaderia"], r["correlativo"]) for r in rows}

@@ -7,6 +7,7 @@ import datetime
 import io
 import os
 
+import pandas as pd
 import streamlit as st
 
 import db
@@ -30,15 +31,15 @@ DIAS_PY_A_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado',
 
 CSS = """
 <style>
-[data-testid="stMetricValue"] { color: #f5efef; }
+[data-testid="stMetricValue"] { color: #2b1414; }
 [data-testid="stMetric"] {
-    background: #1a0d0d; border: 1px solid rgba(204,26,26,0.3); border-radius: 8px; padding: 10px;
+    background: #ffffff; border: 1px solid rgba(204,26,26,0.25); border-radius: 8px; padding: 10px;
 }
-h1, h2, h3 { color: #f5efef !important; }
+h1, h2, h3 { color: #2b1414 !important; }
 .op-header { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
 .op-header img { width: 44px; height: 44px; border-radius: 50%; }
-.op-header .op-title { font-size: 1.4rem; font-weight: 700; color: #f5efef; }
-.op-header .op-sub { color: #b07878; font-size: 0.85rem; }
+.op-header .op-title { font-size: 1.4rem; font-weight: 700; color: #2b1414; }
+.op-header .op-sub { color: #7a4a4a; font-size: 0.85rem; }
 .op-pill {
     display: inline-block; background: #cc1a1a; color: #f5efef; border-radius: 999px;
     padding: 2px 12px; font-size: 0.8rem; font-weight: 600; margin-left: 8px;
@@ -47,9 +48,14 @@ h1, h2, h3 { color: #f5efef !important; }
 """
 
 
+@st.fragment(run_every=60)
 def render_header():
+    """Fragment aparte (Tomás, 2026-08-12: "actualizá hora también" / "quiero que
+    constantemente se actualice") — se re-renderiza solo, cada 60s, sin recargar el resto de
+    la página (no pisa formularios abiertos en otras secciones)."""
     st.markdown(CSS, unsafe_allow_html=True)
-    hoy = datetime.date.today()
+    ahora = datetime.datetime.now()
+    hoy = ahora.date()
     semana_iso = hoy.isocalendar()[1]
     dia_semana = DIAS_PY_A_ES[hoy.weekday()] if hoy.weekday() < 7 else ''
     col_logo, col_txt = st.columns([1, 8])
@@ -59,7 +65,7 @@ def render_header():
         st.markdown(
             f'<div class="op-title">Origen Pampa — Asignación porcina'
             f'<span class="op-pill">Semana {semana_iso}</span></div>'
-            f'<div class="op-sub">Hoy {dia_semana} {hoy.strftime("%d/%m/%Y")}</div>',
+            f'<div class="op-sub">Hoy {dia_semana} {hoy.strftime("%d/%m/%Y")} — {ahora.strftime("%H:%M")}hs</div>',
             unsafe_allow_html=True,
         )
     st.divider()
@@ -142,7 +148,7 @@ if pagina == 'Cargar tipificación':
         creado_por = st.text_input('Tu nombre', placeholder='Ej. Ignacio Beas')
 
         if st.button('Confirmar y guardar', type='primary'):
-            if not proveedor:
+            if not tropa['proveedor']:
                 st.error('Falta el proveedor.')
             elif not creado_por:
                 st.error('Falta tu nombre.')
@@ -172,41 +178,60 @@ elif pagina == 'Generar reparto':
     # --- Estado del stock, deduplicado de verdad (Tomás, 2026-08-12: "está poniendo un stock
     # que no existe" — el total anterior sumaba snapshot + tipificación sin descontar los
     # correlativos que aparecen en ambos lados) ---
-    snap_info = db.fetch_stock_snapshot_info()
-    lotes_hoy = db.fetch_tipificacion_hoy_info()
-    snapshot_rows = db.fetch_stock_snapshot()
-    animales_tipificados = db.fetch_animales_recientes()
-    ya_repartidos = db.fetch_correlativos_ya_repartidos()
-    stock_rows = construir_stock_rows(snapshot_rows, animales_tipificados, ya_repartidos=ya_repartidos)
-    animales_hoy = sum(l['cantidad'] for l in lotes_hoy)
-    n_capon = sum(1 for r in stock_rows if r['merc'] == 'Capón')
-    n_chancha = sum(1 for r in stock_rows if r['merc'] == 'Chancha')
+    @st.fragment(run_every=60)
+    def render_stock_panel():
+        """Fragment aparte (Tomás, 2026-08-12: "quiero que constantemente se actualice el
+        stock") — vuelve a consultar Supabase y se re-renderiza solo cada 60s, sin recargar
+        el resto de la página. Guarda el resultado en session_state para que el botón
+        'Generar propuesta' (fuera del fragment) siempre lea el último dato consultado."""
+        snap_info = db.fetch_stock_snapshot_info()
+        lotes_hoy = db.fetch_tipificacion_hoy_info()
+        snapshot_rows = db.fetch_stock_snapshot()
+        animales_tipificados = db.fetch_animales_recientes()
+        ya_repartidos = db.fetch_correlativos_ya_repartidos()
+        stock_rows = construir_stock_rows(snapshot_rows, animales_tipificados, ya_repartidos=ya_repartidos)
+        st.session_state['stock_actual'] = {
+            'snapshot_rows': snapshot_rows, 'animales_tipificados': animales_tipificados,
+            'ya_repartidos': ya_repartidos, 'stock_rows': stock_rows,
+        }
+        animales_hoy = sum(l['cantidad'] for l in lotes_hoy)
+        n_capon = sum(1 for r in stock_rows if r['merc'] == 'Capón')
+        n_chancha = sum(1 for r in stock_rows if r['merc'] == 'Chancha')
 
-    with st.container(border=True):
-        st.markdown('**Stock disponible ahora mismo (deduplicado, sin lo ya repartido y guardado)**')
-        c1, c2, c3 = st.columns(3)
-        if snap_info['ultimo_sync']:
-            ts = datetime.datetime.fromisoformat(snap_info['ultimo_sync'].replace('Z', '+00:00'))
-            ts_local = ts.astimezone().strftime('%d/%m %H:%M')
-            c1.metric('Última sync del Excel', ts_local, f"{snap_info['total_filas']} piezas en el snapshot")
-        else:
-            c1.metric('Última sync del Excel', 'nunca')
-        c2.metric('Tipificado hoy', f'{animales_hoy} animales', f'{len(lotes_hoy)} tropa(s)')
-        c3.metric('Total disponible real', f'{len(stock_rows)}', f'{n_capon} Capón / {n_chancha} Chancha')
-        if lotes_hoy:
-            st.caption('Tropas de hoy: ' + ', '.join(
-                f"{l['proveedor']} ({l['mercaderia']}, {l['cantidad']})" for l in lotes_hoy))
-        if ya_repartidos:
-            st.caption(f'{len(ya_repartidos)} piezas ya repartidas y guardadas en corridas anteriores — excluidas de este pool.')
+        with st.container(border=True):
+            st.markdown('**Stock disponible ahora mismo (deduplicado, sin lo ya repartido y guardado)** '
+                         '<span style="color:#7a4a4a; font-size:0.8rem;">— se actualiza solo cada 1 min</span>',
+                         unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            if snap_info['ultimo_sync']:
+                ts = datetime.datetime.fromisoformat(snap_info['ultimo_sync'].replace('Z', '+00:00'))
+                ts_local = ts.astimezone().strftime('%d/%m %H:%M')
+                c1.metric('Última sync del Excel', ts_local, f"{snap_info['total_filas']} piezas en el snapshot")
+            else:
+                c1.metric('Última sync del Excel', 'nunca')
+            c2.metric('Tipificado hoy', f'{animales_hoy} animales', f'{len(lotes_hoy)} tropa(s)')
+            c3.metric('Total disponible real', f'{len(stock_rows)}', f'{n_capon} Capón / {n_chancha} Chancha')
+            if lotes_hoy:
+                st.caption('Tropas de hoy: ' + ', '.join(
+                    f"{l['proveedor']} ({l['mercaderia']}, {l['cantidad']})" for l in lotes_hoy))
+            if ya_repartidos:
+                st.caption(f'{len(ya_repartidos)} piezas ya repartidas y guardadas en corridas anteriores — excluidas de este pool.')
 
-        with st.expander(f'Ver detalle — {len(stock_rows)} piezas'):
-            st.dataframe(
-                [{'Correlativo': r['correlativo'], 'Mercadería': r['merc'], 'Kg': r['kg'],
-                  'Grado': r['tipif'], 'Proveedor': r['proveedor'],
-                  'Fecha faena': r['fecha_faena'], 'Observación': r.get('observacion') or ''}
-                 for r in sorted(stock_rows, key=lambda r: (r['merc'], r['correlativo']))],
-                use_container_width=True, hide_index=True, height=300,
-            )
+            with st.expander(f'Ver detalle — {len(stock_rows)} piezas'):
+                st.dataframe(
+                    [{'Correlativo': r['correlativo'], 'Mercadería': r['merc'], 'Kg': r['kg'],
+                      'Grado': r['tipif'], 'Proveedor': r['proveedor'],
+                      'Fecha faena': r['fecha_faena'], 'Observación': r.get('observacion') or ''}
+                     for r in sorted(stock_rows, key=lambda r: (r['merc'], r['correlativo']))],
+                    use_container_width=True, hide_index=True, height=300,
+                )
+
+    render_stock_panel()
+    _stock_actual = st.session_state.get('stock_actual', {})
+    snapshot_rows = _stock_actual.get('snapshot_rows', [])
+    animales_tipificados = _stock_actual.get('animales_tipificados', [])
+    ya_repartidos = _stock_actual.get('ya_repartidos', set())
+    stock_rows = _stock_actual.get('stock_rows', [])
 
     tab_dia, tab_semana = st.tabs(['📅 Reparto del próximo día', '🗓️ Reparto semanal'])
 
@@ -268,9 +293,9 @@ elif pagina == 'Generar reparto':
             wb.remove(wb.active)
             ws0 = wb.create_sheet('Resumen del día')
             write_resumen_dia(ws0, resultado['dia'], {
-                'Capón': (resultado['capon']['shares'], {}, resultado['capon']['target'],
+                'Capón': (resultado['capon']['shares'], resultado['capon']['cupo'], resultado['capon']['target'],
                           resultado['capon']['disponible'], resultado['capon']['asignado_total']),
-                'Chancha': (resultado['chancha']['shares'], {}, resultado['chancha']['target'],
+                'Chancha': (resultado['chancha']['shares'], resultado['chancha']['cupo'], resultado['chancha']['target'],
                             resultado['chancha']['disponible'], resultado['chancha']['asignado_total']),
             })
             for merc_key, merc_label, con_peso in [('capon', 'Capón', True), ('chancha', 'Chancha', False)]:
@@ -359,6 +384,59 @@ elif pagina == 'Generar reparto':
                                 use_container_width=True, hide_index=True,
                             )
 
+            # --- Excel de descarga, un libro con el resumen semanal + un juego de solapas
+            # por día (mismo formato que el reparto diario, reusando write_resumen_dia /
+            # write_correlativos / write_sobrante) ---
+            wb = openpyxl.Workbook()
+            ws_resumen = wb.active
+            ws_resumen.title = 'Resumen semana'
+            ws_resumen['A1'] = f"Resumen semana {rs['semana_iso']} — días: {', '.join(rs['dias'])}"
+            # Tabla simple, una sección por mercadería, una fila por bloque.
+            row_cursor = 3
+            for merc_key, merc_label in [('capon', 'Capón'), ('chancha', 'Chancha')]:
+                m = rs[merc_key]
+                ws_resumen.cell(row_cursor, 1, merc_label).font = openpyxl.styles.Font(bold=True)
+                row_cursor += 1
+                headers = ['Bloque'] + [r['dia'] for r in m['resultados']] + ['Total semana']
+                for j, h in enumerate(headers):
+                    ws_resumen.cell(row_cursor, 1 + j, h).font = openpyxl.styles.Font(bold=True)
+                row_cursor += 1
+                bloques_todos = {}
+                for r in m['resultados']:
+                    for code, (nombre, _s) in r['shares'].items():
+                        bloques_todos.setdefault(code, nombre)
+                for code, nombre in bloques_todos.items():
+                    ws_resumen.cell(row_cursor, 1, nombre)
+                    total = 0
+                    for j, r in enumerate(m['resultados']):
+                        v = r['asignado'].get(code, 0)
+                        ws_resumen.cell(row_cursor, 2 + j, v)
+                        total += v
+                    ws_resumen.cell(row_cursor, 2 + len(m['resultados']), total)
+                    row_cursor += 1
+                ws_resumen.cell(row_cursor, 1, 'Sobrante sin asignar fin de semana')
+                ws_resumen.cell(row_cursor, 2, len(m['sobrante_fin_semana']))
+                row_cursor += 2
+
+            for merc_key, merc_label in [('capon', 'Capón'), ('chancha', 'Chancha')]:
+                m = rs[merc_key]
+                for r in m['resultados']:
+                    dia_corto = r['dia']
+                    ws_r = wb.create_sheet(f'{dia_corto} Resumen {merc_label[:3]}')
+                    write_resumen_dia(ws_r, dia_corto, {
+                        merc_label: (r['shares'], r['presupuesto'], r['asignado'], r['disponible_dia'], r['total_asignado_dia']),
+                    })
+                    ws_c = wb.create_sheet(f'{dia_corto} {merc_label} Correl')
+                    write_correlativos(ws_c, merc_label, r['correlativos'], r['shares'])
+                    ws_s = wb.create_sheet(f'{dia_corto} {merc_label} Sobr')
+                    write_sobrante(ws_s, merc_label, r['sobrante'])
+
+            buf_semana = io.BytesIO()
+            wb.save(buf_semana)
+            st.download_button('Descargar Excel de la semana', buf_semana.getvalue(),
+                                file_name=f"Propuesta reparto semanal - Semana {rs['semana_iso']} - {datetime.date.today().isoformat()}.xlsx",
+                                key='descargar_excel_semana')
+
             if st.button('Guardar toda la semana'):
                 for merc_key, merc_label in [('capon', 'Capón'), ('chancha', 'Chancha')]:
                     m = rs[merc_key]
@@ -395,8 +473,65 @@ elif pagina == 'Actualizar datos':
             st.error(f'Error al leer el Excel: {e}')
 
     st.divider()
+    st.subheader('Cupo semanal por bloque (cantidades)')
+    st.caption('Editá acá directamente las cantidades — no hace falta preparar un Excel. La '
+               'calidad (tipificación/peso) asignada a cada bloque sigue saliendo del promedio '
+               'histórico de abajo, esto no la toca.')
+    tab_capon_cupo, tab_chancha_cupo = st.tabs(['Artículo: Capones', 'Artículo: Chanchas'])
+    for merc_cupo, tab_cupo in [('Capón', tab_capon_cupo), ('Chancha', tab_chancha_cupo)]:
+        with tab_cupo:
+            filas_actuales = db.fetch_cupo_bloque(merc_cupo)
+            por_bloque = {}
+            for f in filas_actuales:
+                por_bloque.setdefault(f['bloque_codigo'], {'nombre': f['bloque_nombre'], 'dias': {}})
+                por_bloque[f['bloque_codigo']]['dias'][f['dia']] = f['cupo']
+            data = []
+            for code, d in sorted(por_bloque.items()):
+                fila = {'Bloque': d['nombre']}
+                for dia in DIAS_HABILES:
+                    fila[dia] = d['dias'].get(dia, 0.0)
+                data.append(fila)
+            df_cupo = pd.DataFrame(data, columns=['Bloque'] + DIAS_HABILES)
+            df_editado = st.data_editor(
+                df_cupo, key=f'editor_cupo_{merc_cupo}', num_rows='dynamic', use_container_width=True,
+                column_config={dia: st.column_config.NumberColumn(dia, min_value=0, step=1) for dia in DIAS_HABILES},
+            )
+
+            # Totales calculados en vivo a partir de lo que se acaba de editar (no de lo
+            # guardado) — Tomás, 2026-08-12: "quiero que los totales... sumen automáticamente".
+            filas_validas = df_editado[df_editado['Bloque'].astype(str).str.strip() != '']
+            cols_total = st.columns(len(DIAS_HABILES) + 1)
+            for i, dia in enumerate(DIAS_HABILES):
+                cols_total[i].metric(dia, int(filas_validas[dia].fillna(0).sum()))
+            cols_total[-1].metric('Total semana', int(filas_validas[DIAS_HABILES].fillna(0).sum().sum()))
+            with st.expander('Total semanal por bloque'):
+                st.dataframe(
+                    pd.DataFrame({'Bloque': filas_validas['Bloque'],
+                                  'Total semanal': filas_validas[DIAS_HABILES].fillna(0).sum(axis=1)}),
+                    use_container_width=True, hide_index=True,
+                )
+
+            if st.button(f'Guardar cupos — {merc_cupo}', key=f'guardar_cupo_{merc_cupo}'):
+                filas_guardar = []
+                for _, fila in df_editado.iterrows():
+                    bloque_txt = str(fila['Bloque']).strip()
+                    if not bloque_txt or bloque_txt.upper() == 'TOTAL':
+                        continue
+                    codigo = bloque_txt.split(' - ', 1)[0].strip()
+                    dias_bloque = {dia: float(fila[dia] or 0) for dia in DIAS_HABILES}
+                    dias_bloque['Total'] = sum(dias_bloque.values())
+                    for dia, cupo in dias_bloque.items():
+                        filas_guardar.append({'bloque_codigo': codigo, 'bloque_nombre': bloque_txt,
+                                               'dia': dia, 'cupo': cupo})
+                db.update_cupos_bloque(merc_cupo, filas_guardar)
+                st.success(f'Cupos de {merc_cupo} guardados.')
+                st.rerun()
+
+    st.divider()
     st.subheader('Histórico de bloques (Promedio diario Capón y Chancha por vendedor.xlsx)')
-    st.caption('Cupo por día de semana y % de peso/tipificación por bloque — reemplaza el histórico anterior entero.')
+    st.caption('% de peso/tipificación por bloque (calidad) — y también reemplaza el cupo de '
+               'cantidades de arriba entero si subís este archivo. Usalo solo si querés recargar '
+               'todo de una desde el Excel; para ajustar cantidades sueltas, usá la grilla de arriba.')
     f_hist = st.file_uploader('Excel histórico', type=['xlsx'], key='up_hist')
     if f_hist is not None and st.button('Cargar histórico'):
         try:
