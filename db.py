@@ -190,3 +190,13 @@ def fetch_correlativos_ya_repartidos():
     sb = get_client()
     rows = sb.table("porcino_reparto_resultados").select("mercaderia,correlativo").execute().data
     return {(r["mercaderia"], r["correlativo"]) for r in rows}
+
+
+def reset_historial_reparto():
+    """Borra TODO lo guardado en 'ya repartido' — Tomás, 2026-08-13: "olvidate los datos
+    anteriores y las asignaciones anteriores, empecemos de cero. Cuando te copien y peguen la
+    tabla del stock, resetea el historial y tomalo como el stock disponible total". Se llama
+    cada vez que se pega/carga un stock nuevo, así ese pegado es SIEMPRE el 100% disponible,
+    sin descontar repartos de corridas viejas que ya no corresponden."""
+    sb = get_client()
+    sb.table("porcino_reparto_resultados").delete().neq("id", 0).execute()

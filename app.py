@@ -568,7 +568,15 @@ elif pagina == 'Actualizar datos':
                 st.error('No encontré filas válidas (necesitan Correlativo y Kg) — ¿pegaste el rango completo?')
             else:
                 db.replace_stock_snapshot(rows)
-                st.success(f'Cargado — {len(rows)} piezas de stock.')
+                # Tomás, 2026-08-13: "olvidate los datos anteriores y las asignaciones
+                # anteriores, empecemos de cero... resetea el historial y tomalo como el stock
+                # disponible total" — cada pegado de stock arranca de cero, sin arrastrar
+                # repartos guardados de corridas viejas.
+                db.reset_historial_reparto()
+                st.session_state.pop('resultado', None)
+                st.session_state.pop('resultado_semana', None)
+                st.success(f'Cargado — {len(rows)} piezas de stock. Historial de repartos reseteado: '
+                           f'este stock es el 100% disponible.')
                 st.session_state['df_stock_pegado'] = _df_stock_vacio()
                 st.rerun()
         except Exception as e:
@@ -580,7 +588,10 @@ elif pagina == 'Actualizar datos':
             try:
                 rows = excel_import.parse_stock_bd(f_stock)
                 db.replace_stock_snapshot(rows)
-                st.success(f'Cargado — {len(rows)} piezas de stock.')
+                db.reset_historial_reparto()
+                st.session_state.pop('resultado', None)
+                st.session_state.pop('resultado_semana', None)
+                st.success(f'Cargado — {len(rows)} piezas de stock. Historial de repartos reseteado.')
             except Exception as e:
                 st.error(f'Error al leer el Excel: {e}')
 
