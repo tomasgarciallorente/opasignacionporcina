@@ -230,7 +230,13 @@ elif pagina == 'Generar reparto':
         snap_info = db.fetch_stock_snapshot_info()
         lotes_hoy = db.fetch_tipificacion_hoy_info()
         snapshot_rows = db.fetch_stock_snapshot()
-        animales_tipificados = db.fetch_animales_recientes()
+        # Tomás, 2026-08-13: "al pegarte esa tabla de stock considerá que es el total
+        # disponible. Por ahora esa va a ser la manera de trabajar, después vamos a explorar
+        # cargando la tipificación" — por ahora NO se suma la tipificación cargada aparte
+        # (evita el doble conteo/confusión de antes); el snapshot pegado en "Actualizar datos"
+        # es la única fuente de stock. Se deja construir_stock_rows tal cual (acepta lista
+        # vacía) para no tener que tocar su lógica cuando se retome la carga de tipificación.
+        animales_tipificados = []
         ya_repartidos = db.fetch_correlativos_ya_repartidos()
         stock_rows = construir_stock_rows(snapshot_rows, animales_tipificados, ya_repartidos=ya_repartidos)
         st.session_state['stock_actual'] = {
@@ -263,18 +269,15 @@ elif pagina == 'Generar reparto':
                 c1.metric('Última sync del Excel', 'nunca')
             c2.metric('Tipificado hoy', f'{animales_hoy} animales', f'{len(lotes_hoy)} tropa(s)')
             c3.metric('Total disponible real', f'{len(stock_rows)}', f'{n_capon} Capón / {n_chancha} Chancha')
-            # Tomás, 2026-08-13: "en stock hay 170 piezas y ahí dice otra cosa que confunde" —
-            # "Última sync del Excel" es SOLO el snapshot subido/pegado. "Total disponible
-            # real" suma también la tipificación cargada de los últimos 7 días (no solo la de
-            # hoy) y resta lo ya repartido — de ahí la diferencia. Se explicita la cuenta acá.
+            # Tomás, 2026-08-13: el snapshot pegado/subido ES el total disponible — ya no se
+            # suma la tipificación cargada aparte (ver comentario arriba).
             st.caption(
                 f"Cómo se arma el total: {snap_info['total_filas']} del snapshot de Excel/pegado "
-                f"+ {len(animales_tipificados)} tipificados en los últimos 7 días "
-                f"− {len(ya_repartidos)} ya repartidos (y descontando los que están en ambos "
-                f"lados) = **{len(stock_rows)} piezas disponibles reales**."
+                f"− {len(ya_repartidos)} ya repartidos = **{len(stock_rows)} piezas disponibles reales**."
             )
             if lotes_hoy:
-                st.caption('Tropas de hoy: ' + ', '.join(
+                st.caption('Tropas tipificadas hoy (informativo — todavía **no** se suman al '
+                           'total disponible, eso lo dejamos para más adelante): ' + ', '.join(
                     f"{l['proveedor']} ({l['mercaderia']}, {l['cantidad']})" for l in lotes_hoy))
             if ya_repartidos:
                 st.caption(f'{len(ya_repartidos)} piezas ya repartidas y guardadas en corridas anteriores — excluidas de este pool.')
@@ -549,12 +552,14 @@ elif pagina == 'Actualizar datos':
 
     if 'df_stock_pegado' not in st.session_state:
         st.session_state['df_stock_pegado'] = _df_stock_vacio()
+    # Sin column_config con tipo forzado para "Fecha faena": Streamlit vuelve a inferir el
+    # dtype de cada columna a partir de lo pegado (Ctrl+V) en cada rerun, y si ese pegado deja
+    # la columna vacía/numérica en algún momento, un TextColumn forzado choca contra eso y
+    # tira StreamlitAPIException (Tomás, 2026-08-13, se repitió incluso con el seed en
+    # dtype='object'). parse_stock_pegado() ya soporta texto o fecha en esa columna.
     df_stock_editado = st.data_editor(
         st.session_state['df_stock_pegado'], key='editor_stock', num_rows='dynamic',
         use_container_width=True, height=350,
-        column_config={
-            'Fecha faena': st.column_config.TextColumn('Fecha faena', help='dd/mm/aaaa, tal cual la pegás del Excel'),
-        },
     )
     if st.button('Cargar stock desde la tabla', type='primary'):
         try:
