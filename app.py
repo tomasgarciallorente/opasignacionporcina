@@ -129,18 +129,37 @@ if pagina == 'Cargar tipificación':
     if tropa:
         st.divider()
         st.subheader(f"{tropa['mercaderia']} — {tropa['cantidad']} cabezas, correlativo {tropa['correlativo_inicial']}..{tropa['correlativo_inicial'] + tropa['cantidad'] - 1}")
-        st.caption('Un renglón por animal — Kg + grado (tocá el botón) + observación si tiene golpe/corte.')
+        st.caption('Tabla tipo Excel — tocá una celda para editarla, o pegá una columna copiada de '
+                   'otra planilla (Ctrl+V) para cargar varias filas de una. Grado y Observación se '
+                   'eligen de una lista desplegable.')
 
-        filas = []
-        for i in range(tropa['cantidad']):
-            correlativo = tropa['correlativo_inicial'] + i
-            c1, c2, c3 = st.columns([1, 2, 2])
-            c1.markdown(f"**{correlativo}**")
-            kg = c1.number_input('Kg', min_value=1.0, max_value=300.0, step=1.0, key=f'kg_{correlativo}', label_visibility='collapsed')
-            grado = c2.radio('Grado', GRADOS, horizontal=True, key=f'grado_{correlativo}', label_visibility='collapsed')
-            obs = c3.selectbox('Observación', OBSERVACIONES, key=f'obs_{correlativo}', label_visibility='collapsed')
-            filas.append({'correlativo': correlativo, 'kg': kg, 'nivel_grasa': grado,
-                          'observacion': None if obs == 'Ninguna' else obs})
+        # Mismo orden de columnas que el romaneo en papel / STOCK (BD) del Excel de Dropbox
+        # (Correlativo, Garrón, Kg, Tipificación, Observaciones) — Tomás, 2026-08-13: "que
+        # tenga el mismo formato... así es más fácil copiar y pegar desde el archivo". Garrón
+        # es solo de referencia visual para alinear el pegado, no se guarda (no forma parte
+        # del motor de reparto).
+        df_tropa = pd.DataFrame({
+            'Correlativo': [tropa['correlativo_inicial'] + i for i in range(tropa['cantidad'])],
+            'Garrón': [0] * tropa['cantidad'],
+            'Kg': [0.0] * tropa['cantidad'],
+            'Grado': ['1'] * tropa['cantidad'],
+            'Observación': ['Ninguna'] * tropa['cantidad'],
+        })
+        df_tropa_editado = st.data_editor(
+            df_tropa, key='editor_tipificacion', use_container_width=True, hide_index=True,
+            height=min(35 * (tropa['cantidad'] + 1) + 3, 900),
+            column_config={
+                'Correlativo': st.column_config.NumberColumn('Correlativo', disabled=True),
+                'Garrón': st.column_config.NumberColumn('Garrón', min_value=0, step=1, help='Solo de referencia, no se guarda.'),
+                'Kg': st.column_config.NumberColumn('Kg', min_value=1.0, max_value=300.0, step=1.0),
+                'Grado': st.column_config.SelectboxColumn('Grado', options=GRADOS),
+                'Observación': st.column_config.SelectboxColumn('Observación', options=OBSERVACIONES),
+            },
+        )
+        filas = [{
+            'correlativo': int(fila['Correlativo']), 'kg': float(fila['Kg']), 'nivel_grasa': fila['Grado'],
+            'observacion': None if fila['Observación'] == 'Ninguna' else fila['Observación'],
+        } for _, fila in df_tropa_editado.iterrows()]
 
         st.divider()
         fotos = st.file_uploader('Fotos del romaneo (opcional, respaldo de toda la tropa — podés subir varias)',
@@ -148,10 +167,14 @@ if pagina == 'Cargar tipificación':
         creado_por = st.text_input('Tu nombre', placeholder='Ej. Ignacio Beas')
 
         if st.button('Confirmar y guardar', type='primary'):
+            sin_kg = [f['correlativo'] for f in filas if f['kg'] <= 0]
             if not tropa['proveedor']:
                 st.error('Falta el proveedor.')
             elif not creado_por:
                 st.error('Falta tu nombre.')
+            elif sin_kg:
+                st.error(f"Faltan cargar los Kg de {len(sin_kg)} animal(es): {', '.join(map(str, sin_kg[:15]))}"
+                          + ('...' if len(sin_kg) > 15 else ''))
             else:
                 lote_id = db.insert_lote(tropa['proveedor'], tropa['fecha_faena'], tropa['mercaderia'],
                                           tropa['correlativo_inicial'], tropa['cantidad'], None, creado_por)
