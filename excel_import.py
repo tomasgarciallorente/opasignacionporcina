@@ -89,19 +89,24 @@ def _parse_fecha_pegada(v):
     return None
 
 
-def _fila_desde_valores(cols_stock, valores):
-    """valores: lista posicional (mismo orden que cols_stock) -> dict con los mismos nombres
+def _fila_desde_valores(columnas, valores):
+    """valores: lista posicional (mismo orden que columnas) -> dict con los mismos nombres
     de columna que usa un DataFrame bien pegado, para reusar la misma extracción de abajo."""
-    return {cols_stock[i]: (valores[i] if i < len(valores) else None) for i in range(len(cols_stock))}
+    return {columnas[i]: (valores[i] if i < len(valores) else None) for i in range(len(columnas))}
 
 
-def _reconstruir_filas_pegado_roto(df, cols_stock):
-    """A veces el data_editor de Streamlit no separa el pegado en celdas — todo el bloque
-    copiado del Excel (varias filas y columnas, tabuladas) cae entero como texto suelto en
-    UNA sola celda (Tomás, 2026-08-13: 'copio y pego del excel y lo pega así y queda mal').
+def reconstruir_filas_pegado_roto(df, columnas):
+    """Utilidad GENÉRICA, reusable en cualquier grilla editable de la app (no solo stock) — a
+    veces el data_editor de Streamlit no separa el pegado en celdas: todo el bloque copiado del
+    Excel (varias filas y columnas, tabuladas) cae entero como texto suelto en UNA sola celda
+    (Tomás, 2026-08-13 y de nuevo 2026-08-14 en la grilla de cupos: 'por qué motivo no se pega
+    bien la tabla... recién pegue bien la tabla y al querer generar reporte daba error'). Se
+    repite en distintas tablas de la app porque es una limitación del widget, no de una tabla
+    puntual — por eso vive acá como helper compartido en vez de reimplementarse cada vez.
     Detecta esas celdas (contienen tabs o saltos de línea) y las vuelve a partir a mano por
     línea y por tab, en el mismo orden de columnas — así el resultado es idéntico a si el
-    pegado se hubiera separado bien de entrada."""
+    pegado se hubiera separado bien de entrada. columnas: lista de nombres, mismo orden que se
+    le pasó a pd.DataFrame(...) al armar la grilla."""
     filas = []
     for _, fila in df.iterrows():
         bloque = None
@@ -114,8 +119,28 @@ def _reconstruir_filas_pegado_roto(df, cols_stock):
         for linea in bloque.splitlines():
             if not linea.strip():
                 continue
-            filas.append(_fila_desde_valores(cols_stock, linea.split('\t')))
+            filas.append(_fila_desde_valores(columnas, linea.split('\t')))
     return filas
+
+
+def texto_pegado_a_df(texto, columnas):
+    """Convierte un bloque de texto pegado (TSV de Excel: filas separadas por saltos de
+    línea, columnas por tab) en un DataFrame con `columnas`, en ese orden posicional.
+    Alternativa 100% determinística al pegado DENTRO de st.data_editor — ese widget
+    ancla mal el pegado multi-fila y hay que reintentar varias veces (Tomás, ago-2026:
+    "hay que hacerlo varias veces hasta que sale"). Acá se pega en un st.text_area común
+    y se parte a mano, sin celda-ancla ni inferencia de dtype que falle."""
+    import pandas as pd
+    filas = []
+    for linea in str(texto or '').splitlines():
+        if not linea.strip():
+            continue
+        celdas = linea.split('\t')
+        filas.append({
+            columnas[i]: (celdas[i].strip() if i < len(celdas) else '')
+            for i in range(len(columnas))
+        })
+    return pd.DataFrame(filas, columns=columnas)
 
 
 def _extraer_fila_stock(fila):
@@ -162,7 +187,7 @@ def parse_stock_pegado(df) -> list[dict]:
 
     Primero intenta leer el DataFrame tal cual (pegado que sí se separó bien en celdas); lo
     que no haya dado ningún animal válido ahí, lo reintenta reconstruyendo filas rotas (ver
-    _reconstruir_filas_pegado_roto) — cubre los dos casos sin que el usuario tenga que saber
+    reconstruir_filas_pegado_roto) — cubre los dos casos sin que el usuario tenga que saber
     cuál pasó."""
     rows = []
     correlativos_vistos = set()
@@ -173,7 +198,7 @@ def parse_stock_pegado(df) -> list[dict]:
             correlativos_vistos.add(r['correlativo'])
 
     cols_stock = list(df.columns)
-    for fila in _reconstruir_filas_pegado_roto(df, cols_stock):
+    for fila in reconstruir_filas_pegado_roto(df, cols_stock):
         r = _extraer_fila_stock(fila)
         if r and r['correlativo'] not in correlativos_vistos:
             rows.append(r)

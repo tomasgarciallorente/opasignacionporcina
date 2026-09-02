@@ -16,6 +16,11 @@ import argparse
 import datetime
 from collections import Counter, defaultdict
 
+try:
+    from tiempo import hoy as _hoy_ar
+except Exception:  # motor de escritorio, sin el módulo de la app web
+    _hoy_ar = datetime.date.today
+
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
@@ -172,7 +177,7 @@ def write_resumen(ws, merc, total_disponible, total_a_asignar, dia, shares, targ
 
 
 def write_correlativos(ws, merc, asignado, shares):
-    ws['A1'] = f'Correlativos reales asignados — {merc} — {datetime.date.today().isoformat()}'
+    ws['A1'] = f'Correlativos reales asignados — {merc} — {_hoy_ar().isoformat()}'
     ws['A1'].font = TITLE_FONT
     ws.merge_cells('A1:G1')
     headers = ['Bloque asignado', 'Correlativo', 'Kg', 'Tipificación', 'Peso', 'Fecha faena', 'Proveedor']
@@ -205,7 +210,7 @@ def write_correlativos(ws, merc, asignado, shares):
 
 
 def write_sobrante(ws, merc, sobrante):
-    ws['A1'] = f'Sin asignar hoy (queda en stock) — {merc} — {datetime.date.today().isoformat()}'
+    ws['A1'] = f'Sin asignar hoy (queda en stock) — {merc} — {_hoy_ar().isoformat()}'
     ws['A1'].font = TITLE_FONT
     ws.merge_cells('A1:E1')
     ws['A2'] = ('Carcazas que ya cubrieron el cupo de todos los bloques para hoy y quedan en stock '
@@ -251,7 +256,7 @@ def write_resumen_dia(ws, dia, bloques_por_merc):
     bloque en particular — a diferencia de una diferencia negativa, que sí es de un bloque
     puntual que se quedó corto). Pedido de Tomás (2026-07-30): "un cuadrito resumen de todo lo
     que se asigna en el día... y el remanente para el día siguiente, y de qué bloque es"."""
-    ws['A1'] = f'Resumen — para el reparto del {dia or ""} (decidido hoy {datetime.date.today().isoformat()}, día de faena)'
+    ws['A1'] = f'Resumen — para el reparto del {dia or ""} (decidido hoy {_hoy_ar().isoformat()}, día de faena)'
     ws['A1'].font = TITLE_FONT
     ws.merge_cells('A1:E1')
     ws['A2'] = ('Cupo = lo que ese bloque necesita hoy según el histórico. Diferencia negativa = '
@@ -364,7 +369,7 @@ def run(out_path=None, dia=None, wb=None, stock_extra=None, cuota_semana=None, t
     if dia is None:
         # hoy = día de faena; la asignación que se decide hoy es PARA el reparto del día
         # hábil siguiente (Tomás, 2026-07-31) — no para "hoy"
-        fecha_reparto = dia_de_reparto(datetime.date.today())
+        fecha_reparto = dia_de_reparto(_hoy_ar())
         dia = DIAS_PY_A_ES[fecha_reparto.weekday()]
     standalone = wb is None
     hist = HistoricalData(HIST_XLSX)

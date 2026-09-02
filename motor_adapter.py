@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from asignacion_engine import HistoricalData, dia_de_reparto  # noqa: E402
 from stock_real import peso_bin, TIPIF_OTHER  # noqa: E402
 from asignacion_semana import asignar_semana, fechas_reparto_semana  # noqa: E402
+from tiempo import hoy as _hoy_ar  # noqa: E402
 
 DIAS_PY_A_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
 
@@ -70,7 +71,7 @@ def construir_stock_rows(snapshot_rows, animales_tipificados, ya_repartidos=None
         rows.append({
             'correlativo': s['correlativo'],
             'proveedor': s.get('proveedor'),
-            'fecha_faena': _parse_fecha(s['fecha_faena']) if s.get('fecha_faena') else datetime.date.today(),
+            'fecha_faena': _parse_fecha(s['fecha_faena']) if s.get('fecha_faena') else _hoy_ar(),
             'tipif_raw': s.get('nivel_grasa'),
             'tipif': s.get('nivel_grasa') or TIPIF_OTHER,
             'kg': kg,
@@ -141,6 +142,13 @@ def reasignar_golpes_cortes(asignado, shares, ranking):
     return movimientos
 
 
+def _shares_seguro(hist, merc):
+    try:
+        return hist.bloque_shares(merc)
+    except Exception:
+        return {}
+
+
 def generar_reparto(snapshot_rows, animales_tipificados, bloque_rows, calidad_rows, dia=None,
                      ya_repartidos=None):
     """Corre el motor completo (Capón + Chancha + reasignación de golpes/cortes). dia: 'Martes'
@@ -165,7 +173,7 @@ def generar_reparto(snapshot_rows, animales_tipificados, bloque_rows, calidad_ro
     'nueva'), así el reparto de un día y el de la semana quedan con la MISMA disciplina en vez
     de dos caminos que podían divergir."""
     if dia is None:
-        dia = DIAS_PY_A_ES[dia_de_reparto(datetime.date.today()).weekday()]
+        dia = DIAS_PY_A_ES[dia_de_reparto(_hoy_ar()).weekday()]
 
     hist = HistoricalData.from_rows(bloque_rows, calidad_rows)
     hist.redirigir('V04', 'V11')  # cartera de V04 (dejó de trabajar) sigue yendo a V11
@@ -177,11 +185,21 @@ def generar_reparto(snapshot_rows, animales_tipificados, bloque_rows, calidad_ro
     if fecha_dia is None:
         # dia pedido ya no está en lo que queda de esta semana (p.ej. se corrió a mano un día
         # que ya pasó) — sin una fecha de referencia no hay 'futuro' que filtrar, se usa hoy.
-        fecha_dia = datetime.date.today()
+        fecha_dia = _hoy_ar()
 
     out = {'dia': dia}
     for merc_key, merc in [('capon', 'Capón'), ('chancha', 'Chancha')]:
         pool = [r for r in stock_rows if r['merc'] == merc]
+        if not pool:
+            # Sin stock de esta mercadería (p.ej. hoy no hay chanchas) — no se corre el motor
+            # (reconciliar una matriz vacía revienta con ValueError); se devuelve un resultado
+            # en cero para que la pantalla y el Excel se rendericen igual.
+            out[merc_key] = {
+                'shares': _shares_seguro(hist, merc), 'target': {}, 'matrix': None,
+                'asignado': {}, 'disponible': 0, 'asignado_total': 0, 'sobrante': [],
+                'cupo': {}, 'movimientos_golpes_cortes': [],
+            }
+            continue
         resultados, _pool_pendiente = asignar_semana(hist, pool, merc, [(dia, fecha_dia)])
         r = resultados[0]
         ranking = ranking_magro(hist, merc)
@@ -213,6 +231,10 @@ def generar_reparto_semanal(snapshot_rows, animales_tipificados, bloque_rows, ca
     out = {'dias': dias, 'semana_iso': dias_fechas[0][1].isocalendar()[1] if dias_fechas else None}
     for merc_key, merc in [('capon', 'Capón'), ('chancha', 'Chancha')]:
         pool = [r for r in stock_rows if r['merc'] == merc]
+        if not pool:
+            out[merc_key] = {'resultados': [], 'sobrante_fin_semana': [],
+                              'movimientos_golpes_cortes_por_dia': {}}
+            continue
         resultados, pool_pendiente = asignar_semana(hist, pool, merc, dias_fechas)
 
         ranking = ranking_magro(hist, merc)

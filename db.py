@@ -4,15 +4,29 @@
 (bypassa RLS) porque el login de esta app es una contraseña compartida, no Supabase Auth
 por usuario — ver plan (moonlit-prancing-willow.md)."""
 import datetime
+import math
 import uuid
 
 import streamlit as st
 from supabase import create_client, Client
 
+from tiempo import hoy as _hoy_ar
+
 
 @st.cache_resource
 def get_client() -> Client:
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_SERVICE_ROLE_KEY"])
+
+
+def _json_safe(rows):
+    """Red de seguridad antes de cualquier insert: NaN/Inf (float no finito, típico de
+    celdas vacías de pandas) rompen la serialización a JSON de postgREST con un
+    ValueError ('Out of range float values are not JSON compliant'). Se reemplazan por
+    None. No cambia nada si las filas ya vienen limpias."""
+    return [
+        {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in r.items()}
+        for r in rows
+    ]
 
 
 # --- Tipificación (carga del tipificador) ---
@@ -34,7 +48,7 @@ def insert_lote(proveedor, fecha_faena, mercaderia, correlativo_inicial, cantida
 def insert_animales(lote_id, animales):
     """animales: [{correlativo, kg, nivel_grasa, observacion}]"""
     sb = get_client()
-    rows = [{"lote_id": lote_id, **a} for a in animales]
+    rows = _json_safe([{"lote_id": lote_id, **a} for a in animales])
     sb.table("porcino_tipificacion_animales").insert(rows).execute()
 
 
@@ -42,7 +56,7 @@ def fetch_animales_recientes(dias=7):
     """Animales tipificados en los últimos N días, con datos del lote (proveedor,
     fecha_faena, mercaderia) — pool para 'Generar reparto'."""
     sb = get_client()
-    desde = (datetime.date.today() - datetime.timedelta(days=dias)).isoformat()
+    desde = (_hoy_ar() - datetime.timedelta(days=dias)).isoformat()
     lotes = sb.table("porcino_tipificacion_lotes").select("*").gte("fecha_faena", desde).execute().data
     if not lotes:
         return []
@@ -68,7 +82,7 @@ def fetch_animales_recientes(dias=7):
 def upload_foto(file_bytes, filename_hint, content_type):
     sb = get_client()
     ext = filename_hint.rsplit(".", 1)[-1] if "." in filename_hint else "jpg"
-    path = f"{datetime.date.today().isoformat()}/{uuid.uuid4().hex}.{ext}"
+    path = f"{_hoy_ar().isoformat()}/{uuid.uuid4().hex}.{ext}"
     sb.storage.from_("romaneos-fotos").upload(path, file_bytes, {"content-type": content_type})
     return sb.storage.from_("romaneos-fotos").get_public_url(path)
 
@@ -94,6 +108,7 @@ def replace_stock_snapshot(rows):
     """rows: [{correlativo, proveedor, fecha_faena, kg, mercaderia, nivel_grasa, comprometido}]
     Reemplaza el snapshot entero (delete + insert) — siempre es 'el último Excel subido'."""
     sb = get_client()
+    rows = _json_safe(rows)
     sb.table("porcino_stock_snapshot").delete().neq("id", 0).execute()
     if rows:
         for i in range(0, len(rows), 500):
@@ -122,7 +137,7 @@ def fetch_tipificacion_hoy_info():
     """Lotes de tipificación cargados hoy (fecha_faena = hoy) — cantidad de animales y de
     qué proveedor/mercadería, para el mismo panel de 'Generar reparto'."""
     sb = get_client()
-    hoy = datetime.date.today().isoformat()
+    hoy = _hoy_ar().isoformat()
     lotes = sb.table("porcino_tipificacion_lotes").select("*").eq("fecha_faena", hoy).execute().data
     return lotes
 
@@ -131,6 +146,8 @@ def replace_historico(bloque_rows, calidad_rows):
     """bloque_rows: [{bloque_codigo, bloque_nombre, mercaderia, dia, cupo}]
     calidad_rows: [{bloque_codigo, mercaderia, eje, categoria, pct}]"""
     sb = get_client()
+    bloque_rows = _json_safe(bloque_rows)
+    calidad_rows = _json_safe(calidad_rows)
     sb.table("porcino_historico_bloque").delete().neq("id", 0).execute()
     sb.table("porcino_historico_calidad").delete().neq("id", 0).execute()
     if bloque_rows:
@@ -162,7 +179,7 @@ def update_cupos_bloque(mercaderia, filas):
     esta mercadería (deja intactas las de la otra mercadería y toda porcino_historico_calidad)."""
     sb = get_client()
     sb.table("porcino_historico_bloque").delete().eq("mercaderia", mercaderia).execute()
-    rows = [{"mercaderia": mercaderia, **f} for f in filas]
+    rows = _json_safe([{"mercaderia": mercaderia, **f} for f in filas])
     if rows:
         for i in range(0, len(rows), 500):
             sb.table("porcino_historico_bloque").insert(rows[i:i + 500]).execute()
@@ -175,7 +192,7 @@ def insert_reparto_resultados(dia_reparto, filas):
     reasignado_por_golpe_corte}]"""
     sb = get_client()
     corrida_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    rows = [{"dia_reparto": dia_reparto, "corrida_at": corrida_at, **f} for f in filas]
+    rows = _json_safe([{"dia_reparto": dia_reparto, "corrida_at": corrida_at, **f} for f in filas])
     for i in range(0, len(rows), 500):
         sb.table("porcino_reparto_resultados").insert(rows[i:i + 500]).execute()
 

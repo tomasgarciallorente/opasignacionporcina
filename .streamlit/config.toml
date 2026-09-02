@@ -1,3 +1,9 @@
+[client]
+# Mostrar el traceback completo en pantalla en vez de "error redacted to prevent
+# data leaks" — es una herramienta interna, no hay datos sensibles que proteger y
+# necesitamos ver los errores de verdad para poder arreglarlos.
+showErrorDetails = "full"
+
 [theme]
 base = "light"
 primaryColor = "#cc1a1a"

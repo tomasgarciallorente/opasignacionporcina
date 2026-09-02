@@ -26,13 +26,18 @@ from asignacion_engine import dia_de_reparto
 from stock_real import filas_manuales
 from run_asignacion_stock_real import asignar_capon, asignar_chancha
 
+try:
+    from tiempo import hoy as _hoy_ar
+except Exception:  # uso desde el motor de escritorio, sin el módulo de la app web
+    _hoy_ar = datetime.date.today
+
 DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
 
 
 def dias_desde_hoy(hoy=None):
     """Días de reparto Lunes..Viernes desde el día de reparto de hoy en adelante (si hoy cae
     fuera de esa ventana — ya pasó la semana — devuelve la lista completa como respaldo)."""
-    hoy = hoy or datetime.date.today()
+    hoy = hoy or _hoy_ar()
     dia_inicio = DIAS_SEMANA[dia_de_reparto(hoy).weekday()] if dia_de_reparto(hoy).weekday() < 5 else 'Lunes'
     if dia_inicio not in DIAS_SEMANA:
         return list(DIAS_SEMANA)
@@ -44,7 +49,7 @@ def fechas_reparto_semana(hoy=None):
     dias_desde_hoy(), dentro de la semana actual (Lunes a Viernes). Necesaria para el filtro de
     "faena todavía no llegó" de asignar_semana (ver más abajo) — con solo el nombre del día no
     alcanza para comparar contra fecha_faena real."""
-    hoy = hoy or datetime.date.today()
+    hoy = hoy or _hoy_ar()
     inicio = dia_de_reparto(hoy)
     lunes_semana = inicio - datetime.timedelta(days=inicio.weekday())
     out = []

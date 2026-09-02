@@ -6,6 +6,7 @@ Actualizar datos. Ver plan: C:\\Users\\Gtecomercial\\.claude\\plans\\moonlit-pra
 import datetime
 import hashlib
 import io
+import math
 import os
 
 import pandas as pd
@@ -13,6 +14,7 @@ import streamlit as st
 
 import db
 import excel_import
+from tiempo import ahora as ahora_ar, hoy as hoy_ar
 from motor_adapter import generar_reparto, generar_reparto_semanal, construir_stock_rows
 from run_asignacion_stock_real import write_resumen_dia, write_correlativos, write_sobrante
 from asignacion_engine import dia_de_reparto
@@ -55,7 +57,7 @@ def render_header():
     constantemente se actualice") — se re-renderiza solo, cada 60s, sin recargar el resto de
     la página (no pisa formularios abiertos en otras secciones)."""
     st.markdown(CSS, unsafe_allow_html=True)
-    ahora = datetime.datetime.now()
+    ahora = ahora_ar()
     hoy = ahora.date()
     semana_iso = hoy.isocalendar()[1]
     dia_semana = DIAS_PY_A_ES[hoy.weekday()] if hoy.weekday() < 7 else ''
@@ -132,7 +134,7 @@ if pagina == 'Cargar tipificación':
     with st.form('form_tropa'):
         col1, col2 = st.columns(2)
         proveedor = col1.text_input('Proveedor', placeholder='Ej. ISOWEAN S.A.')
-        fecha_faena = col2.date_input('Fecha de faena', value=datetime.date.today())
+        fecha_faena = col2.date_input('Fecha de faena', value=hoy_ar())
         col3, col4, col5 = st.columns(3)
         mercaderia = col3.radio('Mercadería', ['Capón', 'Chancha'], horizontal=True)
         correlativo_inicial = col4.number_input('Correlativo inicial', min_value=1, step=1)
@@ -252,7 +254,7 @@ elif pagina == 'Generar reparto':
             with col_titulo:
                 st.markdown('**Stock disponible ahora mismo (deduplicado, sin lo ya repartido y guardado)** '
                              '<span style="color:#7a4a4a; font-size:0.8rem;">— se actualiza solo cada 1 '
-                             f'min, última consulta {datetime.datetime.now().strftime("%H:%M:%S")}</span>',
+                             f'min, última consulta {ahora_ar().strftime("%H:%M:%S")}</span>',
                              unsafe_allow_html=True)
             with col_boton:
                 # Botón dentro del fragment: al tocarlo, Streamlit re-ejecuta SOLO este
@@ -302,7 +304,7 @@ elif pagina == 'Generar reparto':
 
     # ---------------------------- REPARTO DE UN DÍA ----------------------------
     with tab_dia:
-        dia_sugerido = DIAS_PY_A_ES[dia_de_reparto(datetime.date.today()).weekday()]
+        dia_sugerido = DIAS_PY_A_ES[dia_de_reparto(hoy_ar()).weekday()]
         idx_default = DIAS_HABILES.index(dia_sugerido) if dia_sugerido in DIAS_HABILES else 0
         dia = st.selectbox('Día de reparto', DIAS_HABILES, index=idx_default,
                             help='Por defecto, el día hábil siguiente a hoy (hoy es día de faena, '
@@ -373,7 +375,7 @@ elif pagina == 'Generar reparto':
             buf = io.BytesIO()
             wb.save(buf)
             st.download_button('Descargar Excel', buf.getvalue(),
-                                file_name=f"Propuesta reparto - {resultado['dia']} - {datetime.date.today().isoformat()}.xlsx")
+                                file_name=f"Propuesta reparto - {resultado['dia']} - {hoy_ar().isoformat()}.xlsx")
 
             if st.button('Guardar este resultado'):
                 filas_guardar = []
@@ -499,7 +501,7 @@ elif pagina == 'Generar reparto':
             buf_semana = io.BytesIO()
             wb.save(buf_semana)
             st.download_button('Descargar Excel de la semana', buf_semana.getvalue(),
-                                file_name=f"Propuesta reparto semanal - Semana {rs['semana_iso']} - {datetime.date.today().isoformat()}.xlsx",
+                                file_name=f"Propuesta reparto semanal - Semana {rs['semana_iso']} - {hoy_ar().isoformat()}.xlsx",
                                 key='descargar_excel_semana')
 
             if st.button('Guardar toda la semana'):
@@ -562,13 +564,24 @@ elif pagina == 'Actualizar datos':
     # la columna vacía/numérica en algún momento, un TextColumn forzado choca contra eso y
     # tira StreamlitAPIException (Tomás, 2026-08-13, se repitió incluso con el seed en
     # dtype='object'). parse_stock_pegado() ya soporta texto o fecha en esa columna.
+    st.markdown('**Opción A (recomendada) — pegá el bloque de filas acá:**')
+    txt_stock = st.text_area(
+        'Pegá con Ctrl+V las filas de "STOCK (BD)" (columnas A a N, sin encabezado)',
+        key='txt_stock', height=180,
+        placeholder='Una fila por línea, tal cual sale del Excel. Más confiable que la grilla de abajo.',
+    )
+    st.markdown('**Opción B — cargar/editar a mano en la grilla:**')
     df_stock_editado = st.data_editor(
         st.session_state['df_stock_pegado'], key='editor_stock', num_rows='dynamic',
         use_container_width=True, height=350,
     )
     if st.button('Cargar stock desde la tabla', type='primary'):
         try:
-            rows = excel_import.parse_stock_pegado(df_stock_editado)
+            # Si se pegó texto en la caja (opción A), esa es la fuente — parseo
+            # determinístico, sin el widget de grilla de por medio.
+            df_fuente = (excel_import.texto_pegado_a_df(txt_stock, cols_stock)
+                         if txt_stock.strip() else df_stock_editado)
+            rows = excel_import.parse_stock_pegado(df_fuente)
             if not rows:
                 st.error('No encontré filas válidas (necesitan Correlativo y Kg) — ¿pegaste el rango completo?')
             else:
@@ -639,21 +652,59 @@ elif pagina == 'Actualizar datos':
                     use_container_width=True, hide_index=True,
                 )
 
+            txt_cupo = st.text_area(
+                f'O pegá acá el bloque completo con Ctrl+V (Bloque + {", ".join(DIAS_HABILES)}) '
+                '— más confiable que la grilla',
+                key=f'txt_cupo_{merc_cupo}', height=140,
+            )
+
             if st.button(f'Guardar cupos — {merc_cupo}', key=f'guardar_cupo_{merc_cupo}'):
+                cols_cupo = ['Bloque'] + DIAS_HABILES
+                if txt_cupo.strip():
+                    # Pegado en la caja de texto (opción confiable) — parseo determinístico.
+                    filas_totales = excel_import.texto_pegado_a_df(txt_cupo, cols_cupo).to_dict('records')
+                else:
+                    # Fallback: leer de la grilla. Mismo problema y mismo arreglo que en la tabla
+                    # de stock (Tomás, 2026-08-14: "por qué motivo no se pega bien la tabla") — si
+                    # el pegado no se separó en celdas, se reconstruye a mano antes de leer filas.
+                    # Las filas "rotas" (con el pegado entero pegoteado en una celda) se descartan
+                    # tal cual vinieron y se reemplazan por su versión reconstruida — si no, la
+                    # fila rota original también se cuela como un bloque más, con basura en el nombre.
+                    filas_totales = [
+                        f for f in df_editado.to_dict('records')
+                        if not any(isinstance(v, str) and ('\t' in v or '\n' in v) for v in f.values())
+                    ]
+                    filas_totales += excel_import.reconstruir_filas_pegado_roto(df_editado, cols_cupo)
                 filas_guardar = []
-                for _, fila in df_editado.iterrows():
-                    bloque_txt = str(fila['Bloque']).strip()
-                    if not bloque_txt or bloque_txt.upper() == 'TOTAL':
+                bloques_vistos = set()
+                for fila in filas_totales:
+                    bloque_txt = str(fila.get('Bloque') or '').strip()
+                    if not bloque_txt or bloque_txt.upper() == 'TOTAL' or bloque_txt in bloques_vistos:
                         continue
+                    bloques_vistos.add(bloque_txt)
                     codigo = bloque_txt.split(' - ', 1)[0].strip()
-                    dias_bloque = {dia: float(fila[dia] or 0) for dia in DIAS_HABILES}
+
+                    def _num(v):
+                        # Celdas vacías de la grilla llegan como NaN (float no finito) — si
+                        # se manda tal cual a Supabase, el insert falla al serializar a JSON
+                        # ("Out of range float values are not JSON compliant", un ValueError).
+                        try:
+                            f = float(str(v).strip())
+                        except (ValueError, TypeError):
+                            return 0.0
+                        return f if math.isfinite(f) else 0.0
+
+                    dias_bloque = {dia: _num(fila.get(dia)) for dia in DIAS_HABILES}
                     dias_bloque['Total'] = sum(dias_bloque.values())
                     for dia, cupo in dias_bloque.items():
                         filas_guardar.append({'bloque_codigo': codigo, 'bloque_nombre': bloque_txt,
                                                'dia': dia, 'cupo': cupo})
-                db.update_cupos_bloque(merc_cupo, filas_guardar)
-                st.success(f'Cupos de {merc_cupo} guardados.')
-                st.rerun()
+                if not filas_guardar:
+                    st.error('No encontré filas válidas — ¿pegaste el bloque completo (Bloque + días)?')
+                else:
+                    db.update_cupos_bloque(merc_cupo, filas_guardar)
+                    st.success(f'Cupos de {merc_cupo} guardados — {len(bloques_vistos)} bloques.')
+                    st.rerun()
 
     st.divider()
     st.subheader('Histórico de bloques (Promedio diario Capón y Chancha por vendedor.xlsx)')
