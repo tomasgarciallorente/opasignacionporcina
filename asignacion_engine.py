@@ -447,6 +447,16 @@ def transportation_round(float_matrix, row_targets_int, col_targets_int):
     return m
 
 
+# Cuánto se suaviza la preferencia histórica de cada bloque (peso/engrasamiento) hacia un
+# reparto parejo, proporcional a lo que hay en stock. 0 = preferencia pura (cada bloque su
+# mix histórico, como antes); 1 = totalmente parejo (todos reciben cada categoría en
+# proporción a la oferta). Tomás, 2026-09-03: "más justa y equilibrada... mantener la
+# preferencia pero equilibrar los extremos" — un valor bajo mantiene la dirección de la
+# preferencia (cliente que pide magro sigue recibiendo más magro) pero evita que un solo
+# bloque acapare TODA una categoría rara/extrema (ej. muy graso + muy pesado).
+LAMBDA_EQUILIBRIO = 0.25
+
+
 def reconciliar_con_stock_real(target_bloque_int, target_bloque_float, demand_pct, real_counts, bloque_shares):
     """Capa 2/3 unificada cuando SÍ hay stock real itemizado (no una proyección): reparte
     exactamente las unidades REALMENTE disponibles de cada categoría (real_counts) entre
@@ -456,12 +466,24 @@ def reconciliar_con_stock_real(target_bloque_int, target_bloque_float, demand_pc
     entera realmente disponible}. Si ninguna categoría histórica de NINGÚN bloque cubre una
     categoría que sí existe en el stock real, esa categoría se reparte por el peso relativo
     general de cada bloque (bloque_shares) en vez de perderse.
+
+    El 'prior' de cada bloque se suaviza LAMBDA_EQUILIBRIO hacia la proporción disponible de
+    cada categoría (avail_share) — mantiene la preferencia del bloque pero no deja que
+    acapare una categoría extrema (ver LAMBDA_EQUILIBRIO arriba).
     Devuelve {codigo: {categoria: cantidad_entera}}."""
     cats_con_historial = {c for pcts in demand_pct.values() for c in pcts}
+    total_real = sum(real_counts.values()) or 1
+    avail_share = {cat: real_counts[cat] / total_real for cat in real_counts}
     seed = {}
     for code, target_f in target_bloque_float.items():
         pcts = demand_pct.get(code, {})
-        seed[code] = {cat: target_f * pcts.get(cat, 0.0) for cat in real_counts}
+        pref = {cat: pcts.get(cat, 0.0) for cat in real_counts}
+        s = sum(pref.values())
+        pref = ({cat: v / s for cat, v in pref.items()} if s > 0 else dict(avail_share))
+        seed[code] = {
+            cat: target_f * ((1 - LAMBDA_EQUILIBRIO) * pref[cat] + LAMBDA_EQUILIBRIO * avail_share[cat])
+            for cat in real_counts
+        }
     for cat in real_counts:
         if cat not in cats_con_historial:
             for code, target_f in target_bloque_float.items():
@@ -482,22 +504,43 @@ def _orden_fifo(f):
 
 
 def asignar_correlativos_fifo(bloque_order, matrix_int, stock_por_categoria, orden_key=_orden_fifo):
-    """Asigna correlativos REALES (no proyectados) a cada bloque, categoría por categoría,
-    con desempate por orden_key (default: FIFO por fecha de faena, el más viejo primero) —
-    ataca directamente el problema de deshidratación por falta de FIFO que ya está documentado
-    en Origen Pampa. Para bovino se pasa un orden_key que además respeta la PRIORIDAD ya
-    calculada por Origen Pampa (MUY ALTA primero) antes que los días de faena.
-    stock_por_categoria: {categoria: [fila_stock, ...]} ya ordenadas o no (se ordenan acá).
-    Devuelve {codigo: [fila_stock, ...]} y muta stock_por_categoria (consume lo asignado)."""
-    for cat, filas in stock_por_categoria.items():
+    """Asigna correlativos REALES a cada bloque respetando EXACTO el conteo por categoría que
+    fijó matrix_int, pero repartiendo la EDAD (fecha de faena) de forma pareja entre bloques.
+
+    En cada paso: (1) se elige el bloque más "atrasado" respecto de su total del día
+    (menor servido/target); (2) ese bloque se lleva el animal MÁS VIEJO disponible entre las
+    categorías que todavía le faltan. Así lo más viejo de todo sigue saliendo hoy (ataca la
+    deshidratación) pero rotando: ningún bloque se queda con toda la carne vieja ni toda la
+    nueva. Tomás, 2026-09-03: "FIFO global pero intercalado entre bloques".
+
+    orden_key: para bovino respeta además la PRIORIDAD ya calculada por Origen Pampa.
+    stock_por_categoria: {categoria: [fila_stock, ...]}. Se ordena y se consume (muta)."""
+    for _cat, filas in stock_por_categoria.items():
         filas.sort(key=orden_key)
+    need = {code: {cat: matrix_int.get(code, {}).get(cat, 0) for cat in stock_por_categoria}
+            for code in bloque_order}
+    target = {code: sum(v.values()) for code, v in need.items()}
+    servido = {code: 0 for code in bloque_order}
     asignado = {code: [] for code in bloque_order}
-    for cat in list(stock_por_categoria):
-        cola = stock_por_categoria[cat]
-        for code in bloque_order:
-            n = matrix_int.get(code, {}).get(cat, 0)
-            asignado[code].extend(cola[:n])
-            del cola[:n]
+
+    for _ in range(sum(target.values())):
+        cands = [c for c in bloque_order if servido[c] < target[c]]
+        if not cands:
+            break
+        code = min(cands, key=lambda c: (servido[c] / target[c], bloque_order.index(c)))
+        mejor_cat, mejor_key = None, None
+        for cat, n in need[code].items():
+            if n <= 0 or not stock_por_categoria.get(cat):
+                continue
+            k = orden_key(stock_por_categoria[cat][0])
+            if mejor_key is None or k < mejor_key:
+                mejor_key, mejor_cat = k, cat
+        if mejor_cat is None:
+            servido[code] = target[code]  # sus categorías se agotaron en stock: no colgar
+            continue
+        asignado[code].append(stock_por_categoria[mejor_cat].pop(0))
+        need[code][mejor_cat] -= 1
+        servido[code] += 1
     return asignado
 
 
